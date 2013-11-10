@@ -1,0 +1,75 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'methadone'
+require 'glacier_archive.rb'
+
+class App
+  include Methadone::Main
+  include Methadone::CLILogging
+
+  main do |dir|
+    logger.error_formatter= proc {|sev, ts, prg, msg|
+      prg ||= "GlacierArchive"
+      "#{sev[0]} #{ts.strftime "%FT%T"} #{sev} #{msg} (#{prg})\n"
+    }
+    
+    # This makes the program silent except for warnings and above
+    logger.level = Logger::WARN
+    logger.error_level = Logger::WARN
+
+    # This makes us chatty
+    logger.level = Logger::INFO if options[:verbose]
+    
+    # This makes us really really chatty
+    logger.error_level = Logger::DEBUG if options[:debug]
+    logger.level = Logger::INFO if options[:debug]
+
+    dirs = ARGV.map{|i| File.realpath(i)}.compact.uniq
+    debug "#{caller(0,1).first}: Options Hash: #{options.inspect}"
+    debug "#{caller(0,1).first}: Directories: #{dirs.inspect}"
+
+    GlacierArchive.options = options
+
+    begin
+      archiver = GlacierArchive::Archiver.new
+      uploader = GlacierArchive::Uploader.new
+      dirs.each do |dir|
+        info "Archiving #{dir}"
+        archive_file = archiver.archive dir
+        uploader.upload(archive_file)
+      end
+    rescue Exception => e
+      error "Exception in GlacierArchive: #{e.class}: #{e}"
+      debug e.backtrace.join("\n")
+      exit 1
+    ensure
+      archiver.cleanup unless archiver.nil?
+    end
+
+  end
+
+  description "Archive a directory and save to glacier"
+
+  options[:fogrc] = File.join(ENV['HOME'],'.fog')
+  on("--fogrc FOGRCFILE","file that contains fog credentials")
+
+  on("--vault VAULTNAME","AWS Glacier vault to upload to")
+
+  options[:format] = 'TGZ'
+  on("--format TGZ|ZIP","Format for archive, either TGZ: Gzip-compressed Tar archive or",
+     "ZIP: Zip archive")
+  
+  options[:verbose] = false
+  on("--[no-]verbose","Give information about progress", "Default is no output unless errors occur.")
+  options[:debug] = false
+  on("--[no-]debug","Give lots of information for debugging purposes.")
+
+  arg :dir,:optional,"Directories to archive"
+
+  version GlacierArchive::VERSION
+
+  defaults_from_config_file '.glacier_archive'
+
+  go!
+end
